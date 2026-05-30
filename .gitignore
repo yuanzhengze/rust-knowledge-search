@@ -1,0 +1,38 @@
+# Rust build output
+/target/
+
+# Cargo generated lockfile policy:
+# Keep Cargo.lock for binary applications. Do not ignore it here.
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Local index/cache files
+.knowledge_index.json
+*.cache
+*.tmp
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archives generated for submission
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Private notes
+private/
+secrets/
