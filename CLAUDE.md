@@ -4,9 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository is a **Rust course final project in its planning / scaffolding phase**. As of the current state there is no `Cargo.toml` and no `src/` directory — only design docs, a sample-notes corpus, and collaboration rules. The first implementation tasks are to `cargo init` the project and create the module skeleton described below.
+This repository is a **Rust course final project with the MVP completed** (as of 2026-06-02). The Cargo skeleton is in place, all eight production modules under `src/` are implemented, and **65 unit tests + 3 integration tests** pass with `cargo clippy --all-targets -- -D warnings` clean. The three CLI subcommands (`index` / `search` / `ask`) work end-to-end against `examples/sample_notes/`, and `ask` gracefully degrades to candidate snippets when no AI backend is configured (the default `NoopEngine` always returns `AppError::Semantic`).
 
 The project is "基于 Rust 的本地知识库语义搜索系统" — a CLI tool that scans a local directory of Markdown/TXT notes, builds an inverted index, and answers keyword queries plus optional natural-language questions. Most documentation is in Chinese; mirror that language when editing existing docs and in user-facing CLI output, but keep code identifiers in English.
+
+Remaining work (per `plan.md` Day 9–14, all post-MVP polish):
+
+- Day 9 (黄开轩): keyword highlighting, smarter snippet windowing, ANSI colors.
+- Day 10–11 (袁正泽): real `SemanticEngine` implementation — wire `AI_API_KEY` / `AI_BASE_URL` env vars to an embedding or chat API.
+- Day 12 (all): boundary tests (symlinks, permission denied, BOM, oversized files).
+- Day 13 (陈文涛): README / 实验报告素材 / 演示脚本 are already drafted; final polish before submission.
+- Day 14 (all): demo video recording and final acceptance.
 
 ## Common commands
 
