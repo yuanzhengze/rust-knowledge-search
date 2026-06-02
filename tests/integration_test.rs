@@ -1,10 +1,27 @@
-//! 集成测试占位 —— 对应 `docs/测试计划.md` §4 的三个场景。
+//! 集成测试 —— 对应 `docs/测试计划.md` §4 的三个场景。
 //!
-//! 当前全部以 `#[ignore]` 标记,让 `cargo test` 在骨架阶段通过的同时,
-//! 给后续负责人留下明确的"启用我"标记。每个测试上面的注释指明依赖哪些模块完成。
+//! 这些测试通过 `cli::run_*_at` 暴露的库函数模拟真实子命令的行为,
+//! 同时直接组合下游模块(scanner/parser/chunker/indexer/search/storage)
+//! 验证端到端正确性。
+//!
+//! 缓存路径全部使用进程局部的临时目录,避免污染当前工作目录。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use rust_knowledge_search::{cli, AppResult};
+use rust_knowledge_search::{
+    chunker::{chunk_document, DocumentChunk},
+    cli,
+    indexer::InvertedIndex,
+    parser::parse_document,
+    scanner::scan_documents,
+    search::search,
+    storage::{load_index, save_index},
+    AppResult,
+};
 
 /// 让 cli 模块至少在编译期被引用,防止仅使用 binary 时被 dead-code lint 警告。
 #[allow(dead_code)]
@@ -13,24 +30,128 @@ fn _types_compile() -> AppResult<()> {
     Ok(())
 }
 
+/// 零依赖临时目录:与 src/ 各模块单测里 TempDir 同款。
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "rks-it-{}-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos,
+            n
+        ));
+        fs::create_dir_all(&path).expect("create temp dir");
+        Self { path }
+    }
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn sample_notes_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/sample_notes")
+}
+
+/// 工具:把 sample_notes 跑一遍 scanner→parser→chunker→indexer 链,
+/// 返回 (索引, chunks) 二元组,供需要内部状态的测试断言。
+fn build_sample_artifacts() -> (InvertedIndex, Vec<DocumentChunk>) {
+    let metas = scan_documents(&sample_notes_dir()).expect("scan");
+    let mut chunks = Vec::new();
+    for meta in metas {
+        let doc = parse_document(meta).expect("parse");
+        chunks.extend(chunk_document(&doc, 200));
+    }
+    let index = InvertedIndex::build(&chunks);
+    (index, chunks)
+}
+
 #[test]
-#[ignore = "skeleton: 待 indexer + search 完成后启用 —— 测试计划.md §4 完整索引流程"]
 fn index_and_search_sample_notes() {
-    // 1. 调 cli::run() 或直接组合 scanner→parser→chunker→indexer 处理 examples/sample_notes/
-    // 2. 用关键词 "Rust" 搜索,断言至少返回一条结果且分数 > 0
+    // 测试计划 §4 第一条:对示例目录执行完整索引流程,然后用关键词检索。
+    let dir = TempDir::new("index_search");
+    let cache = dir.path().join("idx.json");
+
+    // 1. 通过 cli 库函数走完整 index 子命令流水线。
+    cli::run_index_at(&sample_notes_dir(), &cache).expect("index command should succeed");
+    assert!(cache.exists(), "index 后缓存文件应当存在");
+
+    // 2. 通过 cli 库函数走 search 子命令(只验证不 panic / 不 Err,降级路径走通)。
+    cli::run_search_at(&cache, "Rust", 5).expect("search command should succeed");
+
+    // 3. 用底层 API 复检搜索结果,断言至少一条且分数 > 0。
+    let (index, chunks) = build_sample_artifacts();
+    let results = search(&index, &chunks, "Rust", 5).expect("search ok");
+    assert!(!results.is_empty(), "Rust 应当至少命中一条");
+    assert!(
+        results.iter().all(|r| r.score > 0.0),
+        "命中结果分数必须 > 0"
+    );
+    // 中文查询也应当命中。
+    let zh = search(&index, &chunks, "所有权", 5).expect("search ok");
+    assert!(!zh.is_empty(), "「所有权」应当至少命中一条");
 }
 
 #[test]
-#[ignore = "skeleton: 待 storage 完成后启用 —— 测试计划.md §4 缓存复用流程"]
 fn search_after_loading_cached_index() {
-    // 1. save_index 到临时文件
-    // 2. load_index 读回
-    // 3. 在加载后的索引上做一次 search,断言结果与构建时一致
+    // 测试计划 §4 第二条:save_index → load_index → 在加载后的索引上做 search,
+    // 结果应与构建时一致。
+    let dir = TempDir::new("cache_reuse");
+    let cache = dir.path().join("idx.json");
+
+    let (index, chunks) = build_sample_artifacts();
+    save_index(&cache, &index, &chunks).expect("save");
+
+    let (loaded_index, loaded_chunks) = load_index(&cache).expect("load");
+    assert_eq!(loaded_chunks.len(), chunks.len(), "chunks 数量应保持");
+
+    // 同一查询在原索引和加载后索引上,结果集合应当一致(顺序受同分 tie-break 影响,
+    // 但 chunk_id 集合不应变化)。
+    let original = search(&index, &chunks, "Rust", 10).expect("search original");
+    let restored = search(&loaded_index, &loaded_chunks, "Rust", 10).expect("search restored");
+    assert_eq!(original.len(), restored.len(), "命中数量应当一致");
+    let original_ids: Vec<_> = original.iter().map(|r| r.chunk_id.as_str()).collect();
+    let restored_ids: Vec<_> = restored.iter().map(|r| r.chunk_id.as_str()).collect();
+    assert_eq!(original_ids, restored_ids, "命中 chunk_id 序列应一致");
+    for (o, r) in original.iter().zip(restored.iter()) {
+        assert!(
+            (o.score - r.score).abs() < f64::EPSILON,
+            "分数应一致: {} vs {}",
+            o.score,
+            r.score
+        );
+    }
 }
 
 #[test]
-#[ignore = "skeleton: 待 cli + semantic 完成后启用 —— 测试计划.md §4 ask 降级流程"]
 fn ask_falls_back_when_ai_unavailable() {
-    // 1. 在没有 AI_API_KEY 的环境下运行 ask 子命令
-    // 2. 断言不 panic、不 Err,且输出包含至少一个候选片段
+    // 测试计划 §4 第三条:在没有 AI_API_KEY 的环境下运行 ask 子命令,
+    // 不 panic / 不 Err,且会降级到候选片段展示路径。
+    let dir = TempDir::new("ask_fallback");
+    let cache = dir.path().join("idx.json");
+
+    // 准备索引(走 cli 库函数,模拟用户先 index 再 ask)。
+    cli::run_index_at(&sample_notes_dir(), &cache).expect("index");
+
+    // ask 命令在 NoopEngine 下应当走"AI 不可用 → 展示候选片段"分支,返回 Ok。
+    cli::run_ask_at(&cache, "Rust 的所有权是什么?")
+        .expect("ask should not error when AI unavailable");
+
+    // 即便问题完全无关,也应当走 Ok 而不是 Err(可能返回 0 条候选,但不崩)。
+    cli::run_ask_at(&cache, "kotlin coroutines").expect("ask should handle no-match gracefully");
 }
