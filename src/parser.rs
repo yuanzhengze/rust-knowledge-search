@@ -48,6 +48,13 @@ pub fn parse_document(meta: DocumentMeta) -> AppResult<Document> {
         ))
     })?;
 
+    // 去除可选的 UTF-8 BOM(U+FEFF)。Windows/某些编辑器会在文件开头加 BOM,
+    // 不剥掉的话 BOM 字符会污染 title 和 content,被 indexer 当作普通字符处理。
+    let raw = match raw.strip_prefix('\u{FEFF}') {
+        Some(rest) => rest.to_string(),
+        None => raw,
+    };
+
     let is_markdown = meta
         .path
         .extension()
@@ -372,5 +379,99 @@ mod tests {
         assert_eq!(doc.title.as_deref(), Some("项目简介"));
         // TXT 应当原样保留
         assert!(doc.content.contains("基于 Rust"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Day 12 边界测试: BOM / CRLF 等真实文件场景
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_should_strip_utf8_bom_from_markdown() {
+        let dir = TempDir::new("bom_md");
+        let path = dir.path().join("bom.md");
+        // UTF-8 BOM = EF BB BF, 后接 Markdown 内容
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"# Title\n\nbody line\n");
+        fs::write(&path, &bytes).unwrap();
+
+        let doc = parse_document(meta_for(&path)).expect("parse with BOM");
+        assert_eq!(doc.title.as_deref(), Some("Title"), "title 不应含 BOM");
+        assert!(
+            !doc.content.contains('\u{FEFF}'),
+            "content 不应残留 BOM 字符"
+        );
+        assert!(doc.content.contains("body line"));
+    }
+
+    #[test]
+    fn parse_should_strip_utf8_bom_from_txt() {
+        let dir = TempDir::new("bom_txt");
+        let path = dir.path().join("bom.txt");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice("第一行\n第二行\n".as_bytes());
+        fs::write(&path, &bytes).unwrap();
+
+        let doc = parse_document(meta_for(&path)).expect("parse txt with BOM");
+        assert_eq!(doc.title.as_deref(), Some("第一行"));
+        assert!(!doc.content.starts_with('\u{FEFF}'));
+        // TXT 不做 markdown 清洗,但 BOM 仍应被剥
+        assert!(doc.content.starts_with("第一行"));
+    }
+
+    #[test]
+    fn parse_should_handle_only_bom_file() {
+        // 仅含 BOM、无其它内容的退化文件
+        let dir = TempDir::new("only_bom");
+        let path = dir.path().join("only.md");
+        fs::write(&path, [0xEF, 0xBB, 0xBF]).unwrap();
+
+        let doc = parse_document(meta_for(&path)).expect("parse only-BOM");
+        assert_eq!(doc.title, None);
+        assert_eq!(doc.content, "");
+    }
+
+    #[test]
+    fn parse_should_handle_crlf_line_endings() {
+        // Windows 风格 \r\n 行尾
+        let dir = TempDir::new("crlf");
+        let path = dir.path().join("crlf.md");
+        let raw = "# Title\r\n\r\n## Sub\r\n\r\n- item\r\n\r\nbody\r\n";
+        fs::write(&path, raw).unwrap();
+
+        let doc = parse_document(meta_for(&path)).expect("parse crlf");
+        assert_eq!(doc.title.as_deref(), Some("Title"));
+
+        // 行数对齐:String::lines() 同时识别 \n 和 \r\n,所以原文行数 = 清洗后行数
+        let raw_lines = raw.lines().count();
+        let cleaned_lines = doc.content.lines().count();
+        assert_eq!(
+            raw_lines, cleaned_lines,
+            "CRLF 文件清洗后行数应保持,实际 {raw_lines} -> {cleaned_lines}"
+        );
+        // Markdown 标记仍应被剥
+        assert!(!doc.content.contains("# Title"));
+        assert!(!doc.content.contains("## Sub"));
+        assert!(doc.content.contains("body"));
+        assert!(doc.content.contains("item"));
+    }
+
+    #[test]
+    fn parse_should_handle_chinese_filename() {
+        let dir = TempDir::new("zh_name");
+        let path = write_file(dir.path(), "笔记.md", "# 中文标题\n\n正文\n");
+        let doc = parse_document(meta_for(&path)).expect("parse chinese filename");
+        assert_eq!(doc.title.as_deref(), Some("中文标题"));
+        assert!(doc.content.contains("正文"));
+    }
+
+    #[test]
+    fn parse_should_handle_extremely_long_single_line() {
+        // 单行 5000 字符,parser 不应崩溃,行数仍是 1
+        let dir = TempDir::new("longline");
+        let long = "a".repeat(5000);
+        let path = write_file(dir.path(), "long.md", &long);
+        let doc = parse_document(meta_for(&path)).expect("parse long line");
+        assert_eq!(doc.content.lines().count(), 1);
+        assert!(doc.content.chars().count() >= 5000);
     }
 }
