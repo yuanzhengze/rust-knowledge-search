@@ -1,12 +1,12 @@
 # 基于 Rust 的本地知识库语义搜索系统
 
-[![Tests](https://img.shields.io/badge/tests-65%20unit%20%2B%203%20integration-brightgreen)]() [![Rust](https://img.shields.io/badge/rust-2021-orange)]() [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)]()
+[![Tests](https://img.shields.io/badge/tests-96%20unit%20%2B%204%20integration-brightgreen)]() [![Rust](https://img.shields.io/badge/rust-2021-orange)]() [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)]()
 
 本项目是 Rust 程序设计课程期末大作业。系统是一个**纯本地**的命令行工具：扫描指定目录下的 Markdown / TXT 文档，构建关键词倒排索引，支持关键词检索与自然语言问答。AI 仅作为可选增强，**没有 API Key、没有网络也能完整使用基础功能**。
 
 ## 项目状态
 
-✅ **MVP 完成** —— 三条命令 `index` / `search` / `ask` 全部可用，65 个单元测试 + 3 个集成测试全部通过。
+✅ **MVP 完成 + Day 9 / Day 10-11 增强已落地** —— 三条命令 `index` / `search` / `ask` 全部可用，96 个单元测试 + 4 个集成测试全部通过。`ask` 命令在配置 `AI_API_KEY` 时调用 OpenAI 兼容的 Chat Completions API 给真实回答，未配置时降级到候选片段展示。
 
 具体能力：
 
@@ -88,7 +88,28 @@ cargo run -- ask "Rust 的所有权是什么?"
     Rust 所有权笔记...
 ```
 
-未来接入真实 `SemanticEngine`（见 `src/semantic.rs` trait 定义）后，会在片段之上额外给出 AI 总结回答。
+配置任意 OpenAI 兼容的 chat 后端（OpenAI / DeepSeek / 智谱 / 月之暗面 / SiliconFlow / OpenRouter 等）后，自动启用真实 AI 回答：
+
+```bash
+export AI_API_KEY=sk-...
+export AI_BASE_URL=https://api.deepseek.com/v1   # 可选，默认 https://api.openai.com/v1
+export AI_CHAT_MODEL=deepseek-chat                # 可选，默认 gpt-4o-mini
+cargo run -- ask "Rust 的所有权是什么?"
+```
+
+输出会变为：
+
+```text
+AI 回答:
+Rust 的所有权机制让每个值都有唯一所有者，作用域结束时自动释放...
+
+引用片段:
+
+[1] ./examples/sample_notes/rust_ownership.md#L1-L14  分数 39.00
+    ...
+```
+
+引擎实现见 `src/semantic.rs::ChatEngine`，使用 `reqwest` 同步 HTTP 调用 `{AI_BASE_URL}/chat/completions` 端点。任何错误（无 API_KEY、网络断、API 返回 4xx/5xx、JSON 解析失败）都映射为 `AppError::Semantic`，cli 层自动降级为候选片段展示，**永远不会让 ask 命令崩溃**。
 
 ## 命令一览
 
@@ -110,12 +131,12 @@ cargo run -- search --help
 | 变量 | 用途 | 缺省 |
 |---|---|---|
 | `KNOWLEDGE_INDEX_PATH` | 索引缓存文件路径 | `.knowledge_index.json` |
-| `AI_API_KEY` | (预留)语义引擎 API Key | 未读取 |
-| `AI_BASE_URL` | (预留)语义引擎 base URL | 未读取 |
+| `AI_API_KEY` | OpenAI 兼容 chat API 的密钥 | 未设置时 ask 走降级路径 |
+| `AI_BASE_URL` | OpenAI 兼容 chat API 的 base URL | `https://api.openai.com/v1` |
+| `AI_CHAT_MODEL` | 调用的 chat 模型 ID | `gpt-4o-mini` |
 | `AI_EMBEDDING_MODEL` | (预留)embedding 模型 ID | 未读取 |
-| `AI_CHAT_MODEL` | (预留)对话模型 ID | 未读取 |
 
-参考 `.env.example`。当前 `ask` 命令使用 `NoopEngine` 占位实现，所有 AI 路径都会走降级分支。
+参考 `.env.example`。`ask` 命令在配置 `AI_API_KEY` 时启用 `ChatEngine` 调用真实 LLM；未配置时落到 `NoopEngine` 走候选片段展示。
 
 ## 目录结构
 
@@ -147,7 +168,7 @@ cargo run -- search --help
     ├── indexer.rs               # 倒排索引(邱俊杰)
     ├── search.rs                # 搜索排序(邱俊杰)
     ├── storage.rs               # 索引缓存(袁正泽)
-    ├── semantic.rs              # 可选语义增强(袁正泽)
+    ├── semantic.rs              # 可选语义增强(谭张锐, Day 10-11 移交)
     └── error.rs                 # 统一错误类型 AppError / AppResult
 ```
 
@@ -182,8 +203,8 @@ cargo test scanner   # 仅跑某个模块的测试
 
 测试规模:
 
-- **scanner** 8 个 / **parser** 11 个 / **chunker** 11 个 / **indexer** 9 个 / **search** 10 个 / **storage** 7 个 / **semantic** 2 个 / **cli** 7 个 = **65 单元测试**
-- **集成测试** 3 个:完整索引流程、缓存复用、ask 降级路径
+- **scanner** 8 个 / **parser** 11 个 / **chunker** 11 个 / **indexer** 9 个 / **search** 10 个 / **storage** 7 个 / **semantic** 11 个 / **cli** 29 个 = **96 单元测试**
+- **集成测试** 4 个:完整索引流程、缓存复用、ask 降级路径、ANSI 高亮验证
 
 详见 `docs/测试计划.md`。
 
@@ -191,10 +212,10 @@ cargo test scanner   # 仅跑某个模块的测试
 
 | 成员 | 主要模块 | 交付物 |
 |---|---|---|
-| **袁正泽** | 项目负责人、架构设计、`storage.rs`、`semantic.rs` | 整体架构、缓存原子写入、AI 降级骨架 |
-| **谭张锐** | `scanner.rs` | 目录扫描与元数据收集 |
+| **袁正泽** | 项目负责人、架构设计、`storage.rs`、`error.rs` | 整体架构、缓存原子写入、统一错误类型 |
+| **谭张锐** | `scanner.rs`、`semantic.rs`(Day 10-11 移交) | 目录扫描与元数据收集、语义增强 + AI 接入 |
 | **邱俊杰** | `indexer.rs`、`search.rs` | 倒排索引、词频排序、Top K |
-| **黄开轩** | `cli.rs`、`main.rs` | 命令行交互、结果渲染、集成测试启用 |
+| **黄开轩** | `cli.rs`、`main.rs` | 命令行交互、结果渲染、ANSI 高亮、集成测试启用 |
 | **陈文涛** | `parser.rs`、`chunker.rs`、文档与报告素材 | 解析与切片、README、演示脚本、报告素材 |
 
 具体提交记录见 Git log 与 `开发日志.md`。
@@ -216,7 +237,8 @@ cargo test scanner   # 仅跑某个模块的测试
 1. **中文友好的零依赖分词**:CJK Unified Ideographs 按字符 unigram,ASCII 按字母数字累积,既不需要 jieba 这类大字典依赖,又能支持中英文混合查询
 2. **行号对齐的 Markdown 清洗**:parser 清洗时严格保持行数不变(代码围栏行替换为空行),让 chunker 报告的 `start_line` / `end_line` 直接对应原始文件行号,后续可以做精确高亮回溯
 3. **POSIX 原子缓存写入**:`storage::save_index` 写到同目录临时文件再 rename,中断不会留半写文件,JSON 损坏可以明确区分"语义级别索引未就绪"(`AppError::Index`)与"序列化失败"(`AppError::Serde`)
-4. **AI 可降级原则**:`SemanticEngine` 是 trait,`NoopEngine` 占位返回 `AppError::Semantic`,cli 的 `ask` 命令在 trait 错误时自动展示候选片段。整个项目可以在没有任何外部网络的环境中完整运行
+4. **可插拔 + 可降级的 AI 集成**:`SemanticEngine` 是 trait,`ChatEngine` 调用 OpenAI 兼容协议(一份代码接入 OpenAI/DeepSeek/智谱/Kimi 等所有兼容供应商),`NoopEngine` 在未配置 API_KEY 或网络失败时托底。任何错误都映射为 `AppError::Semantic`,cli 层用 `match` 自动降级 —— **整个项目可以在没有任何外部网络的环境中完整运行,接入 AI 后又能立刻给出真实回答**
+5. **ANSI 着色与智能 snippet**(Day 9 黄开轩):`--color <auto|always|never>` 全局参数遵守 `NO_COLOR` 事实标准与 `IsTerminal` TTY 检测,管道与 CI 自动关闭着色;snippet 围绕首个匹配 token 取上下文(前后各 60 字符),按 char 而非 byte 截断,UTF-8 安全
 
 ## 课程提交内容
 

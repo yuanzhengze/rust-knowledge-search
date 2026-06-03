@@ -21,3 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 regex = "1"
+# 语义增强模块用 reqwest 的同步 (blocking) 客户端调用 OpenAI 兼容的 chat 接口。
+# 见 plan.md §4.2 可选依赖、agent.md §1 "AI 可降级"原则:
+# 没有 AI_API_KEY 或网络不可用时,cli 自动回落到 NoopEngine + 候选片段展示。
+reqwest = { version = "0.12", features = ["blocking", "json"] }

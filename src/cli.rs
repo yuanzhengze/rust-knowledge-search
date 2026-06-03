@@ -38,7 +38,7 @@ use crate::indexer::InvertedIndex;
 use crate::parser::parse_document;
 use crate::scanner::scan_documents;
 use crate::search::{search, SearchResult};
-use crate::semantic::{NoopEngine, SemanticEngine};
+use crate::semantic::{ChatEngine, NoopEngine, SemanticEngine};
 use crate::storage::{load_index, save_index};
 
 /// 默认缓存文件名(相对当前工作目录),与 `.gitignore` 保持一致。
@@ -229,6 +229,13 @@ pub fn run_search_at(cache: &Path, query: &str, top: usize, color: bool) -> AppR
 
 /// `ask` 子命令实现:加载缓存 → 检索候选 → 调用 [`SemanticEngine::answer`],
 /// 失败时降级展示候选片段。
+///
+/// 引擎选择策略:
+/// 1. 先尝试 [`ChatEngine::from_env`] —— 只要 `AI_API_KEY` 配置好就用真实 LLM。
+/// 2. 没配置就直接用 [`NoopEngine`],它的 `answer` 永远返回
+///    `AppError::Semantic("semantic engine disabled")`,被下面的 match 捕获后降级。
+/// 3. 即便 `ChatEngine` 在调用过程中网络失败,错误也是 `AppError::Semantic(...)`,
+///    依然走降级分支,不会 panic 也不会让整个进程退出。
 pub fn run_ask_at(cache: &Path, question: &str, color: bool) -> AppResult<()> {
     let (index, chunks) = load_index(cache)?;
     let results = search(&index, &chunks, question, ASK_TOP_K)?;
@@ -244,11 +251,18 @@ pub fn run_ask_at(cache: &Path, question: &str, color: bool) -> AppResult<()> {
         .cloned()
         .collect();
 
-    let engine = NoopEngine;
-    match engine.answer(question, &context_chunks) {
+    // 优先 ChatEngine,失败则 NoopEngine。两者都返回 AppResult<String>,
+    // 下面的 match 统一处理。
+    let answer_result = if let Some(engine) = ChatEngine::from_env() {
+        engine.answer(question, &context_chunks)
+    } else {
+        NoopEngine.answer(question, &context_chunks)
+    };
+
+    match answer_result {
         Ok(answer) => {
             println!("{}", paint("AI 回答:", ANSI_BOLD, color));
-            println!("{answer}\n");
+            println!("{}\n", answer.trim());
             println!("{}\n", paint("引用片段:", ANSI_BOLD, color));
         }
         Err(AppError::Semantic(msg)) => {
