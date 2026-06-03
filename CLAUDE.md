@@ -11,7 +11,7 @@ The project is "基于 Rust 的本地知识库语义搜索系统" — a CLI tool
 Remaining work (per `plan.md` Day 9–14, all post-MVP polish):
 
 - Day 9 (黄开轩): keyword highlighting, smarter snippet windowing, ANSI colors.
-- Day 10–11 (袁正泽): real `SemanticEngine` implementation — wire `AI_API_KEY` / `AI_BASE_URL` env vars to an embedding or chat API.
+- Day 10–11 (谭张锐): real `SemanticEngine` implementation — wire `AI_API_KEY` / `AI_BASE_URL` env vars to an embedding or chat API. **Status: ChatEngine implemented (2026-06-03), calling OpenAI-compatible chat completions API via reqwest blocking client.**
 - Day 12 (all): boundary tests (symlinks, permission denied, BOM, oversized files).
 - Day 13 (陈文涛): README / 实验报告素材 / 演示脚本 are already drafted; final polish before submission.
 - Day 14 (all): demo video recording and final acceptance.
@@ -58,7 +58,7 @@ CLI → scanner → parser → chunker → indexer → search → (optional) sem
 | `chunker.rs` | Split `Document` into `DocumentChunk`s with stable IDs and line ranges | 陈文涛 |
 | `indexer.rs` | Build `InvertedIndex` (term → chunk-id mapping + term frequencies) | 邱俊杰 |
 | `search.rs` | Score and rank chunks, return top-k `SearchResult`s | 邱俊杰 |
-| `semantic.rs` | Optional `SemanticEngine` trait — embedding/AI ranking and `ask` answering | 袁正泽 |
+| `semantic.rs` | Optional `SemanticEngine` trait — `NoopEngine` fallback + `ChatEngine` (OpenAI-compatible chat API via reqwest) | 谭张锐 |
 | `storage.rs` | `serde_json` save/load of index + chunks to a cache file | 袁正泽 |
 | `error.rs` | `AppError` (thiserror) and `AppResult<T>` used by every module | 袁正泽 |
 

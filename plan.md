@@ -128,12 +128,13 @@ cargo run -- ask "Rust 的生命周期是什么？"
 
 ## 5. 成员分工
 
-### 袁正泽：项目负责人、架构设计、语义增强模块
+### 袁正泽：项目负责人、架构设计、缓存与统一错误
 
 主要任务：
 
 - 设计整体项目结构和模块接口。
-- 负责 `semantic.rs`，实现语义搜索或 AI 问答增强。
+- 负责 `storage.rs` 的索引缓存（原子写入 + serde_json）。
+- 负责 `error.rs` 的统一错误类型 `AppError` / `AppResult<T>`。
 - 负责最终集成，保证各模块可以协同运行。
 - 维护 Git 仓库主分支，检查代码风格和提交记录。
 - 负责演示时讲解整体架构和创新点。
@@ -141,10 +142,10 @@ cargo run -- ask "Rust 的生命周期是什么？"
 交付物：
 
 - 项目架构说明
-- 语义搜索或 AI 增强模块
+- 索引缓存模块与统一错误类型
 - 最终集成版本
 
-### 谭张锐：文件扫描模块
+### 谭张锐：文件扫描模块 + 语义增强模块
 
 主要任务：
 
@@ -153,11 +154,17 @@ cargo run -- ask "Rust 的生命周期是什么？"
 - 支持 `.md` 和 `.txt` 文件过滤。
 - 读取文件元数据，包括路径、大小、修改时间。
 - 处理隐藏文件、空文件和异常文件。
+- 负责 `semantic.rs`（Day 10–11 任务移交，原由袁正泽负责，2026-06-03 调整）。
+  - 设计 `SemanticEngine` trait，提供 `NoopEngine` 占位降级。
+  - 接入 OpenAI 兼容的 Chat Completions API（DeepSeek / 智谱 / 月之暗面 / OpenAI 等都兼容）。
+  - 配置通过环境变量 `AI_API_KEY` / `AI_BASE_URL` / `AI_CHAT_MODEL` 读取，严禁硬编码。
+  - 任意失败必须返回 `AppError::Semantic`，让 cli 自动降级到候选片段展示。
 
 交付物：
 
 - 文件扫描模块
 - 扫描模块单元测试
+- 语义增强模块（`SemanticEngine` trait + `NoopEngine` + `ChatEngine`）
 - 示例目录扫描结果
 
 ### 邱俊杰：索引构建与搜索排序模块
