@@ -304,4 +304,110 @@ mod tests {
         assert!(only.modified_time.is_some(), "modified_time 应当能读到");
         assert!(only.path.ends_with("n.md"));
     }
+
+    // -----------------------------------------------------------------------
+    // Day 12 边界测试(谭张锐主导): 真实文件名 / 文件系统场景下的鲁棒性
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_documents_should_handle_filenames_with_spaces() {
+        let dir = TempDir::new("spaces");
+        write(dir.path(), "my notes.md", "# spaced");
+        write(dir.path(), "another note.txt", "spaced");
+
+        let metas = scan_documents(dir.path()).expect("scan spaced");
+        assert_eq!(
+            names(&metas),
+            vec!["another note.txt".to_string(), "my notes.md".to_string()],
+            "文件名含空格应当被正常识别"
+        );
+    }
+
+    #[test]
+    fn scan_documents_should_handle_chinese_filenames() {
+        let dir = TempDir::new("zh");
+        write(dir.path(), "笔记.md", "# 中文");
+        write(dir.path(), "学习资料.txt", "中文");
+
+        let metas = scan_documents(dir.path()).expect("scan zh");
+        assert_eq!(
+            names(&metas),
+            vec!["学习资料.txt".to_string(), "笔记.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn scan_documents_should_handle_emoji_filenames() {
+        // emoji 在 macOS APFS 与 Linux ext4 上都合法。Windows NTFS 也允许。
+        let dir = TempDir::new("emoji");
+        write(dir.path(), "📝note.md", "# emoji");
+        write(dir.path(), "✨todo.txt", "emoji");
+
+        let metas = scan_documents(dir.path()).expect("scan emoji");
+        let got = names(&metas);
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().any(|n| n.contains("note.md")));
+        assert!(got.iter().any(|n| n.contains("todo.txt")));
+    }
+
+    /// 符号链接测试 —— 仅在 Unix(macOS/Linux)上跑;Windows 需要管理员权限创建 symlink。
+    #[cfg(unix)]
+    #[test]
+    fn scan_documents_should_not_follow_symlinks_into_cycles() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new("symlink_cycle");
+        write(dir.path(), "real.md", "# real");
+        // 创建 sub/ → 指向父目录,如果 walkdir 跟随 symlink 会无限递归直到栈溢出。
+        // 我们 follow_links(false) 配置应当让 sub/ 被忽略。
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let _ = symlink(dir.path(), dir.path().join("sub").join("loop"));
+
+        let metas = scan_documents(dir.path()).expect("scan with symlink loop");
+        // 只应找到 real.md,symlink 指向的目录不被跟随。
+        assert!(
+            metas.iter().any(|m| m.file_name == "real.md"),
+            "应找到 real.md"
+        );
+        // 不应陷入死循环或返回大量重复条目。
+        assert!(
+            metas.len() < 20,
+            "不应跟随 symlink 死循环,实际 {} 条",
+            metas.len()
+        );
+    }
+
+    /// 权限不足的目录应当报错而非静默吞掉。仅 Unix 可控制权限。
+    #[cfg(unix)]
+    #[test]
+    fn scan_documents_should_surface_permission_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new("perm_denied");
+        write(dir.path(), "ok.md", "# visible");
+        let locked = dir.path().join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        write(&locked, "secret.md", "# hidden");
+        // 0o000:谁也不能进。walkdir 进入 locked/ 时应当报 EACCES,
+        // 我们的实现把它 propagate 成 AppError::Io。
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = scan_documents(dir.path());
+
+        // 恢复权限以便 TempDir Drop 时能清理。
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+
+        // 当前实现选择把 walkdir 中的 IO 错误冒泡(避免静默丢失内容)。
+        match result {
+            Err(AppError::Io(_)) => {} // 期望路径
+            Ok(metas) => {
+                // 某些系统在 root 用户下 0o000 仍可访问;此时至少应当能扫到根目录的 ok.md。
+                assert!(
+                    metas.iter().any(|m| m.file_name == "ok.md"),
+                    "如果未触发权限错误,至少应当看到根目录的 ok.md"
+                );
+            }
+            Err(other) => panic!("expected Io permission error, got {other:?}"),
+        }
+    }
 }

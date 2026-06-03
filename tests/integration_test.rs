@@ -174,3 +174,57 @@ fn search_with_color_should_emit_ansi_in_snippet() {
         "color=false 时 snippet 不应含 ANSI 控制码,实际: {plain:?}"
     );
 }
+
+#[test]
+fn pipeline_should_handle_special_filenames_end_to_end() {
+    // Day 12 验收:含 emoji / 中文 / 空格的文件名能完整流过
+    // scanner → parser → chunker → indexer → search → storage 整条流水线。
+    let dir = TempDir::new("special_names");
+    let knowledge_root = dir.path().join("knowledge");
+    fs::create_dir_all(&knowledge_root).unwrap();
+
+    fs::write(
+        knowledge_root.join("📝note.md"),
+        "# Emoji 文件名\n\nRust 所有权 emoji-marked\n",
+    )
+    .unwrap();
+    fs::write(
+        knowledge_root.join("学习笔记.md"),
+        "# 中文文件名\n\nRust 错误处理 chinese-marked\n",
+    )
+    .unwrap();
+    fs::write(
+        knowledge_root.join("my notes.txt"),
+        "Spaced filename\n包含 Rust 关键词\n",
+    )
+    .unwrap();
+
+    let cache = dir.path().join("idx.json");
+    cli::run_index_at(&knowledge_root, &cache).expect("index special filenames");
+    assert!(cache.exists(), "缓存应当生成");
+
+    // search 应当能跨三个特殊文件名命中 Rust
+    let (index, chunks) = rust_knowledge_search::storage::load_index(&cache).expect("load");
+    let results = search(&index, &chunks, "Rust", 10).expect("search");
+    assert!(
+        results.len() >= 3,
+        "三个特殊文件名都含 Rust,应至少 3 条命中,实际 {}",
+        results.len()
+    );
+    let chunk_ids: Vec<_> = results.iter().map(|r| r.chunk_id.as_str()).collect();
+    assert!(
+        chunk_ids.iter().any(|id| id.contains("📝note")),
+        "emoji 文件应当被索引"
+    );
+    assert!(
+        chunk_ids.iter().any(|id| id.contains("学习笔记")),
+        "中文文件应当被索引"
+    );
+    assert!(
+        chunk_ids.iter().any(|id| id.contains("my notes")),
+        "含空格文件应当被索引"
+    );
+
+    // 通过 cli::run_search_at 走完整渲染路径(color=false 让输出可断言)
+    cli::run_search_at(&cache, "Rust", 10, false).expect("search via cli");
+}

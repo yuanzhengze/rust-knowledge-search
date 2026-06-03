@@ -690,4 +690,48 @@ mod tests {
         let cli = Cli::try_parse_from(["rust-knowledge-search", "search", "Rust"]).unwrap();
         assert!(matches!(cli.color, ColorChoice::Auto));
     }
+
+    // -----------------------------------------------------------------------
+    // Day 12 边界测试: 缓存缺失场景
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn run_search_at_should_error_when_cache_missing() {
+        // 没先 index 就 search,storage::load_index 应当返回 AppError::Index,
+        // cli 一路冒泡上去而不是 panic。
+        let missing = std::env::temp_dir().join(format!(
+            "rks-cli-missing-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        // 确保不存在
+        let _ = std::fs::remove_file(&missing);
+
+        let err = run_search_at(&missing, "Rust", 5, false).expect_err("missing cache must error");
+        assert!(
+            matches!(err, AppError::Index(_)),
+            "缺失缓存应映射为 AppError::Index, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn run_ask_at_should_error_when_cache_missing() {
+        // ask 也走 storage::load_index,行为应当与 search 一致
+        let missing = std::env::temp_dir().join(format!(
+            "rks-cli-missing-ask-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_file(&missing);
+
+        let err =
+            run_ask_at(&missing, "?", false).expect_err("missing cache must error before AI call");
+        assert!(matches!(err, AppError::Index(_)), "got {err:?}");
+    }
 }

@@ -288,4 +288,72 @@ mod tests {
         assert!(!results.is_empty(), "Rust 应当至少命中一条");
         assert!(results.iter().all(|r| r.score > 0.0));
     }
+
+    // -----------------------------------------------------------------------
+    // Day 12 边界测试: 真实文件系统场景
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_should_handle_path_with_spaces() {
+        let dir = TempDir::new("path_with_spaces");
+        let cache = dir.path().join("my cache file.json");
+        let (index, chunks) = sample_data();
+
+        save_index(&cache, &index, &chunks).expect("save to spaced path");
+        let (loaded, _) = load_index(&cache).expect("load from spaced path");
+        assert!(!loaded.lookup("Rust").is_empty());
+    }
+
+    #[test]
+    fn save_should_handle_path_with_chinese() {
+        let dir = TempDir::new("zh_path");
+        let cache = dir.path().join("我的索引.json");
+        let (index, chunks) = sample_data();
+
+        save_index(&cache, &index, &chunks).expect("save to chinese path");
+        let (loaded, _) = load_index(&cache).expect("load from chinese path");
+        assert!(!loaded.lookup("Rust").is_empty());
+    }
+
+    #[test]
+    fn save_should_handle_path_with_emoji() {
+        let dir = TempDir::new("emoji_path");
+        let cache = dir.path().join("✨idx.json");
+        let (index, chunks) = sample_data();
+
+        save_index(&cache, &index, &chunks).expect("save to emoji path");
+        let (loaded, _) = load_index(&cache).expect("load from emoji path");
+        assert!(!loaded.lookup("Rust").is_empty());
+    }
+
+    /// 在只读父目录里 save 应当返回 IO 错误而不是 panic。仅 Unix 可控制权限。
+    #[cfg(unix)]
+    #[test]
+    fn save_should_fail_for_readonly_parent_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new("readonly_parent");
+        let parent = dir.path().join("ro_dir");
+        fs::create_dir_all(&parent).unwrap();
+        // 0o555 = r-x r-x r-x: 可以列出 / cd, 但不能在里面创建文件
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let cache = parent.join("idx.json");
+        let (index, chunks) = sample_data();
+        let result = save_index(&cache, &index, &chunks);
+
+        // 恢复权限以便 TempDir Drop 时能清理
+        let _ = fs::set_permissions(&parent, fs::Permissions::from_mode(0o755));
+
+        // 大部分 Unix 系统下普通用户在只读目录创建文件会得到 EACCES → AppError::Io
+        match result {
+            Err(AppError::Io(_)) => {} // 期望路径
+            Ok(()) => {
+                // 极少数情况(root 用户、特殊文件系统如 /tmp 配置宽松等)可能成功,
+                // 不强行失败,但要求文件实际存在
+                assert!(cache.exists(), "如果 save 返回 Ok,缓存文件应当真实存在");
+            }
+            Err(other) => panic!("expected Io error, got {other:?}"),
+        }
+    }
 }
